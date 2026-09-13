@@ -27,7 +27,7 @@ rec {
     nixpkgs: modules:
     import "${nixpkgs}/nixos/lib/eval-config.nix" {
       system = null;
-      inherit lib;
+      lib = (import nixpkgs { }).lib;
       modules = modules;
     };
   #build system's rootfs
