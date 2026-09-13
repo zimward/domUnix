@@ -12,7 +12,9 @@
     ];
     config = {
       boot.loader.grub.enable = false;
-      boot.loader.generic-extlinux-compatible.enable = true;
+      boot.loader.external.enable = true;
+      boot.loader.external.installHook = "${pkgs.coreutils}/bin/true";
+
       fileSystems."/" = {
         device = "tmpfs";
         fsType = "tmpfs";
