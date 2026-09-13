@@ -9,17 +9,19 @@ rec {
     file: cfg:
     let
       ini = pkgs.formats.iniWithGlobalSection { };
-      escapeStrings = a: if lib.isList then map (e: "'${e}'") a else "'${a}'";
+      escapeStrings = a: if lib.isList a then map (e: "'${toString e}'") a else "'${toString a}'";
     in
-    ini.generate "${file}.cfg" (
-      lib.mapAttrs (
+    ini.generate "${file}.cfg" {
+      globalSection = lib.mapAttrs (
         path: value:
         if lib.isList value then
           "[ ${lib.strings.concatStringsSep " " (escapeStrings value)} ]"
-        else
+        else if lib.isString value then
           (escapeStrings value)
-      ) cfg
-    );
+        else
+          (toString value)
+      ) cfg;
+    };
 
   evalSystem =
     nixpkgs: modules:
@@ -41,62 +43,67 @@ rec {
       dontInstall = true;
 
       exportReferencesGraph = [
-        "graph"
+        "store"
         system.config.system.build.toplevel
       ];
       nativeBuildInputs = [
         pkgs.erofs-utils
-        pkgs.breakpointHook
       ];
       buildPhase = ''
-        #get only lines
-        grep / graph | tar --transform="s,^nix/,," --keep-directory-symlink -cf - -T - | mkfs.erofs $out --tar=-
+        # get only store paths not node id's
+        # use a static uuid and lable for now to make the builds more reproduceable
+        grep / store | tar --transform="s,^nix/,," --keep-directory-symlink -cf - -T - | mkfs.erofs -L erofs-store -U 6ea01cdf-a710-4216-94cb-fad6ed852312 -z zstd  $out --tar=-
       '';
     };
   buildInitrd = system: system.config.system.build.initialRamdisk;
   buildKernel = system: system.config.system.build.kernel;
+  #maybe only use init later?
+  buildToplevel = system: system.config.system.build.toplevel;
 
   #needs some more love later for proper overrides
   buildXenConfig =
     name: store: init: kernel: ramdisk: options:
-    mkXenConfig name {
-      inherit name;
-      type = "phv";
-      disks = [
-        "format=raw,vdev=xvda,access=r,target=${store}"
-      ];
-      inherit ramdisk;
-      inherit kernel;
-      #for now use system toplevel as the init is stored there
-      cmdline = "init=${init} console=hvc0";
-      serial = "pty";
-    }
-    // options;
+    mkXenConfig name (
+      {
+        inherit name;
+        type = "pvh";
+        disk = [
+          "format=raw,vdev=xvda,access=r,target=${store}"
+        ];
+        inherit ramdisk;
+        inherit kernel;
+        #for now use system toplevel as the init is stored there
+        cmdline = "init=${init} console=hvc0";
+        serial = "pty";
+      }
+      // options
+    );
 
   buildXenVM =
     nixpkgs: modules: settings:
     let
       system = evalSystem nixpkgs modules;
+      store = buildStore system;
+      toplevel = buildToplevel system;
       kernel = buildKernel system;
       initrd = buildInitrd system;
-      store = buildStore system;
     in
-    pkgs.linkFarm "vm-system" [
-      {
-        name = "kernel";
-        path = kernel;
-      }
-      {
-        name = "initrd";
-        path = initrd;
-      }
-      {
-        name = "store.erofs";
-        path = store;
-      }
-      {
-        name = "config.cfg";
-        path = buildXenConfig "meow" store "${system}/init" kernel initrd settings;
-      }
-    ];
+    buildXenConfig "meow" store "${toplevel}/init" "${kernel}/bzImage" "${initrd}/initrd" settings;
+
+  buildXenVMLinks =
+    nixpkgs: modules: settings:
+    let
+      system = evalSystem nixpkgs modules;
+      comps = rec {
+        store = buildStore system;
+        toplevel = buildToplevel system;
+        kernel = buildKernel system;
+        initrd = buildInitrd system;
+        "vm.cfg" =
+          buildXenConfig "meow" store "${toplevel}/init" "${kernel}/bzImage" "${initrd}/initrd"
+            settings;
+      };
+      mkEntry = e: lib.mapAttrsToList (name: path: { inherit name path; }) e;
+    in
+    pkgs.linkFarm "xen-vm-components" (mkEntry comps);
 }

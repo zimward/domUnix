@@ -7,7 +7,7 @@
   {
     imports = [
       "${modulesPath}/profiles/minimal.nix"
-      # "${modulesPath}/profiles/bashless.nix"
+      "${modulesPath}/profiles/bashless.nix"
       "${modulesPath}/virtualisation/xen-domU.nix"
     ];
     config = {
@@ -18,7 +18,7 @@
         fsType = "tmpfs";
       };
       fileSystems."/nix" = {
-        device = "/dev/xvda";
+        device = "/dev/disk/by-label/erofs-store";
         fsType = "erofs";
       };
       users.users.root = {
