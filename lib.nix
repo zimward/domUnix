@@ -15,7 +15,7 @@ rec {
       globalSection = lib.mapAttrs (
         path: value:
         if lib.isList value then
-          "[ ${lib.strings.concatStringsSep " " (escapeStrings value)} ]"
+          "[ ${lib.strings.concatStringsSep "," (escapeStrings value)} ]"
         else if lib.isString value then
           (escapeStrings value)
         else
