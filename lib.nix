@@ -3,6 +3,15 @@
 }:
 let
   lib = pkgs.lib;
+  depLaundry =
+    drv:
+    pkgs.stdenvNoCC.mkDerivation {
+      inherit (drv) name;
+      dontUnpack = true;
+      buildPhase = "${pkgs.coreutils}/bin/cp -r ${drv.out} $out";
+      __structuredAttrs = true;
+      unsafeDiscardReferences.out = true;
+    };
 in
 rec {
   mkXenConfig =
@@ -33,6 +42,24 @@ rec {
   #build system's rootfs
   buildStore =
     system:
+    let
+      graph = pkgs.stdenvNoCC.mkDerivation {
+        name = "store-graph";
+        dontUnpack = true;
+        dontPatch = true;
+        dontConfigure = true;
+        dontFixup = true;
+        dontInstall = true;
+        # using unsafeDiscardReferences seems to disable the graph, soo lets just build it seperately...
+        exportReferencesGraph = [
+          "store"
+          system.config.system.build.toplevel
+        ];
+        buildPhase = ''
+          mv store $out
+        '';
+      };
+    in
     pkgs.stdenvNoCC.mkDerivation {
       name = "store.erofs";
 
@@ -42,17 +69,19 @@ rec {
       dontFixup = true;
       dontInstall = true;
 
-      exportReferencesGraph = [
-        "store"
-        system.config.system.build.toplevel
-      ];
+      store = graph;
+
+      __structuredAttrs = true;
+      unsafeDiscardReferences.out = true;
+
       nativeBuildInputs = [
         pkgs.erofs-utils
+        pkgs.breakpointHook
       ];
       buildPhase = ''
         # get only store paths not node id's
         # use a static uuid and lable for now to make the builds more reproduceable
-        grep / store | tar --transform="s,^nix/,," --keep-directory-symlink -cf - -T - | mkfs.erofs -L erofs-store -U 6ea01cdf-a710-4216-94cb-fad6ed852312 -z zstd  $out --tar=-
+        grep / $store | tar --transform="s,^nix/,," --keep-directory-symlink -cf - -T - | mkfs.erofs -L erofs-store -U 6ea01cdf-a710-4216-94cb-fad6ed852312 -z zstd  $out --tar=-
       '';
     };
   buildInitrd = system: system.config.system.build.initialRamdisk;
@@ -88,20 +117,23 @@ rec {
       kernel = buildKernel system;
       initrd = buildInitrd system;
     in
-    buildXenConfig "meow" store "${toplevel}/init" "${kernel}/bzImage" "${initrd}/initrd" settings;
+    buildXenConfig "meow" store "${builtins.unsafeDiscardOutputDependency toplevel}/init"
+      "${kernel}/bzImage"
+      "${initrd}/initrd"
+      settings;
 
   buildXenVMLinks =
     nixpkgs: modules: settings:
     let
       system = evalSystem nixpkgs modules;
+      toplevel = buildToplevel system;
       comps = rec {
         store = buildStore system;
-        toplevel = buildToplevel system;
         kernel = buildKernel system;
         initrd = buildInitrd system;
-        "vm.cfg" =
-          buildXenConfig "meow" store "${toplevel}/init" "${kernel}/bzImage" "${initrd}/initrd"
-            settings;
+        "vm.cfg" = depLaundry (
+          buildXenConfig "meow" store "${toplevel}/init" "${kernel}/bzImage" "${initrd}/initrd" settings
+        );
       };
       mkEntry = e: lib.mapAttrsToList (name: path: { inherit name path; }) e;
     in
